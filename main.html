@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NTU 自定义地图展示</title>
+    <!-- 引入Leaflet核心库 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- 引入谷歌底图适配插件 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-plugins/3.4.0/layer/tile/Google.js"></script>
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; }
+        #map { width: 100%; height: 100%; }
+        /* 自定义弹窗样式 */
+        .leaflet-popup-content { min-width: 200px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script>
+        // 1. 初始化地图（定位到NTU核心区域）
+        const map = L.map('map', {
+            center: [1.3483, 103.6831], // NTU核心坐标
+            zoom: 17,
+            zoomControl: true
+        });
+
+        // 2. 添加谷歌地图底图（可选：普通地图/卫星图）
+        // 谷歌普通地图
+        const googleRoad = L.tileLayer('http://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+            maxZoom: 20,
+            subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+        }).addTo(map);
+        // 谷歌卫星图（如需切换，注释上面，打开下面）
+        // const googleSatellite = L.tileLayer('http://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+        //     maxZoom: 20,
+        //     subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+        // }).addTo(map);
+
+        // 3. 定义不同类型点的图标（区分楼梯/车站/建筑）
+        const iconTypes = {
+            stair: L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/128/4040/4040637.png', // 楼梯图标
+                iconSize: [30, 30],
+                iconAnchor: [15, 30]
+            }),
+            bus: L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/128/3147/3147585.png', // 车站图标
+                iconSize: [30, 30],
+                iconAnchor: [15, 30]
+            }),
+            building: L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/128/4333/4333669.png', // 建筑图标
+                iconSize: [30, 30],
+                iconAnchor: [15, 30]
+            })
+        };
+
+        // 4. 加载并解析你的JSON数据文件（核心）
+        // 替换为你的JSON文件路径（本地/服务器均可）
+        fetch('ntu_custom_data.json')
+            .then(response => response.json())
+            .then(data => {
+                // 4.1 渲染所有点要素（Marker）
+                data.markers.forEach(marker => {
+                    // 根据类型选择图标，默认用建筑图标
+                    const icon = iconTypes[marker.type] || iconTypes.building;
+                    const Lmarker = L.marker([marker.lat, marker.lng], { icon: icon })
+                        .addTo(map);
+
+                    // 绑定弹窗（显示自定义属性：名称、楼层、描述）
+                    Lmarker.bindPopup(`
+                        <h4>${marker.name}</h4>
+                        <p>类型：${marker.type}</p>
+                        <p>楼层：${marker.floor}</p>
+                        <p>描述：${marker.desc}</p>
+                    `);
+                });
+
+                // 4.2 渲染所有线要素（Polyline）
+                data.polylines.forEach(polyline => {
+                    // 转换坐标格式（Leaflet要求 [lat, lng] 顺序）
+                    const coords = polyline.coordinates;
+                    const Lpolyline = L.polyline(coords, {
+                        color: polyline.color,
+                        weight: polyline.weight,
+                        opacity: 0.8
+                    }).addTo(map);
+
+                    // 绑定弹窗（显示路线名称、楼层）
+                    Lpolyline.bindPopup(`
+                        <h4>${polyline.name}</h4>
+                        <p>楼层：${polyline.floor}</p>
+                    `);
+                });
+            })
+            .catch(error => {
+                console.error('加载JSON数据失败：', error);
+                alert('地图数据加载失败，请检查JSON文件路径！');
+            });
+    </script>
+</body>
+</html>

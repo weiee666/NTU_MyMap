@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>NTU Campus Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #map {
+            width: 100%;
+            height: 90vh;
+        }
+        /* 可选：微调弹窗样式 */
+        .road-props-popup .leaflet-popup-content-wrapper {
+            max-width: 320px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // 1. 初始化地图（定位到 NTU）
+        const map = L.map('map').setView([1.3483, 103.6825], 16);
+
+        // 底图
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        // 辅助：从 GeoJSON 几何中提取道路的起点/终点
+        // 支持 LineString 和 MultiLineString（对 Multi 取坐标数组最长的子线作为代表）
+        function getEndpoints(geometry) {
+            if (!geometry) return null;
+            const type = geometry.type;
+            if (type === 'LineString') {
+                const coords = geometry.coordinates;
+                if (!coords || coords.length === 0) return null;
+                const start = coords[0];
+                const end = coords[coords.length - 1];
+                // GeoJSON: [lon, lat] -> Leaflet expects [lat, lon]
+                return [ [start[1], start[0]], [end[1], end[0]] ];
+            } else if (type === 'MultiLineString') {
+                const multis = geometry.coordinates;
+                if (!multis || multis.length === 0) return null;
+                // 选长度（点数）最多的子线作为代表
+                let longest = multis[0];
+                for (let i = 1; i < multis.length; i++) {
+                    if (multis[i].length > longest.length) longest = multis[i];
+                }
+                if (!longest || longest.length === 0) return null;
+                const start = longest[0];
+                const end = longest[longest.length - 1];
+                return [ [start[1], start[0]], [end[1], end[0]] ];
+            }
+            return null;
+        }
+
+        // 将属性对象转成 HTML 列表（安全地转为字符串）
+        function propsToHtml(props) {
+            if (!props) return '<div><strong>Properties</strong><div>(no properties)</div></div>';
+            const keys = Object.keys(props);
+            if (keys.length === 0) return '<div><strong>Properties</strong><div>(no properties)</div></div>';
+            let html = '<div><strong>Road properties</strong><ul style="margin:6px 0 0 16px;padding:0;">';
+            keys.forEach(k => {
+                let v = props[k];
+                if (v === null || v === undefined) v = '';
+                else if (typeof v === 'object') v = JSON.stringify(v);
+                html += `<li><strong>${k}:</strong> ${String(v)}</li>`;
+            });
+            html += '</ul></div>';
+            return html;
+        }
+
+        // 辅助：从 feature 提取 road_type（优先使用 properties.road_type，然后是 highway 或 type），并转为小写字符串
+        function getRoadType(feature) {
+            if (!feature || !feature.properties) return null;
+            const p = feature.properties;
+            let t = p.road_type || p.highway || p.type || p.roadType || p.ROAD_TYPE;
+            if (t === null || t === undefined) return null;
+            try { return String(t).toLowerCase(); } catch (e) { return null; }
+        }
+
+        const ALLOWED_TYPES = new Set(['footway', 'pedestrian', 'cycleway']);
+
+        // 根据 road_type 返回样式（便于区分）
+        function styleByRoadType(feature) {
+            const rt = getRoadType(feature);
+            if (rt === 'footway') return { color: '#ff8a65', weight: 3, opacity: 0.9 };
+            if (rt === 'pedestrian') return { color: '#f4511e', weight: 3, opacity: 0.9 };
+            if (rt === 'cycleway') return { color: '#558b2f', weight: 3, opacity: 0.9 };
+            return { color: '#4285F4', weight: 3, opacity: 0.8 };
+        }
+
+        // ==========================
+        // 加载道路（只绘制特定类型）
+        // ==========================
+        fetch('/getData/ntu_roads.geojson')
+            .then(res => res.json())
+            .then(data => {
+                L.geoJSON(data, {
+                    filter: function(feature) {
+                        const rt = getRoadType(feature);
+                        return rt && ALLOWED_TYPES.has(rt);
+                    },
+                    style: styleByRoadType,
+                    onEachFeature: function(feature, layer) {
+                        // 给每条道路添加 mouseover / mouseout 事件
+                        layer.on({
+                            mouseover: function(e) {
+                                // 改变样式以高亮
+                                try {
+                                    layer.setStyle({ weight: 6, color: '#1a73e8' });
+                                } catch (err) {
+                                    // 有些图层可能是非路径（忽略）
+                                }
+
+                                const geom = feature && feature.geometry;
+                                const endpoints = getEndpoints(geom);
+
+                                // 创建端点标记（如果有）并在标记上显示坐标
+                                if (endpoints) {
+                                    const group = L.layerGroup();
+
+                                    const startLat = endpoints[0][0];
+                                    const startLon = endpoints[0][1];
+                                    const endLat = endpoints[1][0];
+                                    const endLon = endpoints[1][1];
+
+                                    const startMarker = L.circleMarker(endpoints[0], {
+                                        radius: 6,
+                                        color: '#FF5722',
+                                        fillColor: '#FF8A65',
+                                        fillOpacity: 0.9
+                                    });
+                                    const endMarker = L.circleMarker(endpoints[1], {
+                                        radius: 6,
+                                        color: '#4CAF50',
+                                        fillColor: '#A5D6A7',
+                                        fillOpacity: 0.9
+                                    });
+
+                                    // 在标记上显示坐标（保留在地图上，直到 mouseout）
+                                    const startCoordText = `${startLat.toFixed(6)}, ${startLon.toFixed(6)}`;
+                                    const endCoordText = `${endLat.toFixed(6)}, ${endLon.toFixed(6)}`;
+                                    startMarker.bindTooltip(startCoordText, {permanent: true, direction: 'top', className: 'endpoint-tooltip'});
+                                    endMarker.bindTooltip(endCoordText, {permanent: true, direction: 'top', className: 'endpoint-tooltip'});
+
+                                    group.addLayer(startMarker);
+                                    group.addLayer(endMarker);
+                                    group.addTo(map);
+
+                                    layer._endpointsGroup = group;
+                                }
+
+                                // 创建并显示道路属性弹窗（位于鼠标位置）
+                                const propsHtml = propsToHtml(feature && feature.properties);
+                                const propsPopup = L.popup({ closeButton: false, autoClose: false, className: 'road-props-popup' })
+                                    .setLatLng(e.latlng)
+                                    .setContent(propsHtml)
+                                    .addTo(map);
+                                layer._propsPopup = propsPopup;
+                            },
+                            mouseout: function(e) {
+                                // 恢复样式
+                                try {
+                                    // 恢复为基于 road_type 的原始样式，而不是固定颜色
+                                    layer.setStyle(styleByRoadType(feature));
+                                } catch (err) {
+                                }
+                                // 移除临时端点图层
+                                if (layer._endpointsGroup) {
+                                    map.removeLayer(layer._endpointsGroup);
+                                    layer._endpointsGroup = null;
+                                }
+                                // 移除属性弹窗
+                                if (layer._propsPopup) {
+                                    map.removeLayer(layer._propsPopup);
+                                    layer._propsPopup = null;
+                                }
+                            }
+                        });
+                    }
+                }).addTo(map);
+            })
+            .catch(err => console.error('读取道路 GeoJSON 失败：', err));
+
+        // // ==========================
+        // // 加载建筑
+        // // ==========================
+        // fetch('./getData/ntu_buildings.geojson')
+        //     .then(res => res.json())
+        //     .then(data => {
+        //         L.geoJSON(data, {
+        //             style: {
+        //                 fillColor: '#EA4335',
+        //                 color: '#C21E56',
+        //                 weight: 1,
+        //                 fillOpacity: 0.6
+        //             }
+        //         }).addTo(map);
+        //     });
+    </script>
+</body>
+</html>
